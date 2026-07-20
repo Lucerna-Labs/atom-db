@@ -1,6 +1,6 @@
 use atom_db::{
     AtomDb, Bond, CognitiveConfig, CognitiveEngine, Digest, Error as AtomError, LearningScope,
-    RecallReport,
+    RecallReport, Retriever,
 };
 use std::{
     env, fs,
@@ -55,6 +55,30 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     bond.source, bond.relation, bond.target
                 );
             }
+        }
+        [command, path, source, text @ ..] if command == "remember" && !text.is_empty() => {
+            let mut db = AtomDb::open_writer(path)?;
+            let receipt = Retriever::default().remember(&mut db, source, &text.join(" "))?;
+            println!("cell={}", receipt.cell.identity);
+            println!("source={}", receipt.source);
+            println!("passages={}", receipt.passages.len());
+            println!("unique_terms={}", receipt.unique_terms);
+            println!("verified=true");
+        }
+        [command, path, source, input] if command == "remember-file" => {
+            let mut db = AtomDb::open_writer(path)?;
+            let document = fs::read_to_string(input)?;
+            let receipt = Retriever::default().remember(&mut db, source, &document)?;
+            println!("cell={}", receipt.cell.identity);
+            println!("source={}", receipt.source);
+            println!("passages={}", receipt.passages.len());
+            println!("unique_terms={}", receipt.unique_terms);
+            println!("verified=true");
+        }
+        [command, path, query @ ..] if command == "retrieve" && !query.is_empty() => {
+            let mut db = AtomDb::open_read_only(path)?;
+            let packet = Retriever::default().retrieve(&mut db, &query.join(" "))?;
+            println!("{}", packet.to_json());
         }
         [command, path] if command == "stats" => print_store_stats(&AtomDb::open_read_only(path)?)?,
         [command, path] if command == "verify" => print_store_stats(&AtomDb::open_writer(path)?)?,
@@ -564,6 +588,6 @@ fn refuse_overwrite(path: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn print_usage() {
     eprintln!(
         "Atom DB - dependency-free immutable fact substrate\n\n\
-usage:\n  atom-db init <store>\n  atom-db put <store> <text...>\n  atom-db put-file <store> <file>\n  atom-db get <store> <atom-id>\n  atom-db bond <store> <source-id> <relation-id> <target-id>\n  atom-db bonds <store> <source-id>\n  atom-db stats <store>\n  atom-db verify <store>\n  atom-db demo <new-store>\n  atom-db cognitive-demo <new-store>\n  atom-db context-demo <new-store>\n  atom-db relay-demo <new-store>\n  atom-db cell-demo <new-store>\n  atom-db lease-demo <new-store>"
+usage:\n  atom-db init <store>\n  atom-db put <store> <text...>\n  atom-db put-file <store> <file>\n  atom-db get <store> <atom-id>\n  atom-db bond <store> <source-id> <relation-id> <target-id>\n  atom-db bonds <store> <source-id>\n  atom-db remember <store> <source> <text...>\n  atom-db remember-file <store> <source> <file>\n  atom-db retrieve <store> <query...>\n  atom-db stats <store>\n  atom-db verify <store>\n  atom-db demo <new-store>\n  atom-db cognitive-demo <new-store>\n  atom-db context-demo <new-store>\n  atom-db relay-demo <new-store>\n  atom-db cell-demo <new-store>\n  atom-db lease-demo <new-store>"
     );
 }

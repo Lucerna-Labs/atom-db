@@ -1,0 +1,47 @@
+Atom DB Stage 7 - retrieval field
+
+artifact=artifacts/stage7-retrieval-field.atoms
+sources=2
+passages=2
+atoms=24
+bonds=20
+cells=2
+facts=44
+frames=48
+durable_bytes=7194
+repaired_tail_bytes=0
+provisional_tail_bytes=0
+
+positive_query=How does writer lease recovery work after a crash?
+snapshot_sequence=48
+answerable=true
+insufficient_evidence=false
+known_cues=writer,lease,recovery,crash
+top_evidence=cee22e68387cde9ca7e612c61084d6df9abc649abdf363ff4661e2b9a85bfabd
+top_source=observer-leases.md
+top_activation=3920000
+top_depth=1
+top_incoming_signals=4
+top_provenance_threads=4
+context_bytes=105
+field_rounds=3
+field_explored_bonds=12
+field_working_set_peak=12
+field_promoted_bonds=11
+field_stabilized=true
+field_budget_exhausted=false
+
+negative_query=Where is the marmalade quasar?
+negative_known_cues=0
+negative_evidence=0
+negative_answerable=false
+negative_insufficient_evidence=true
+negative_stabilized=true
+negative_budget_exhausted=false
+
+workspace_tests=29 passed
+workspace_clippy_warnings=0
+third_party_dependencies=0
+atom_db_package_rust_lines=3970
+retrieval_field_crate_rust_lines=833
+verified=true
