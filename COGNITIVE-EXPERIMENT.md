@@ -60,3 +60,31 @@ decay, and explainable recall. It does not yet implement durable cognitive
 checkpoints, chunk formation, abstraction, semantic embeddings, natural-language
 understanding, or consciousness. Repeated feedback can create a habit that
 overrides a weaker context signal; that bias is a measured behavior, not hidden.
+
+## Stage 3: context-gated plasticity
+
+Stage 3 treats a normalized set of context atoms as a cognitive lane. Feedback
+updates conductance only inside the active lane. Context order and duplicate
+context identities cannot change activation or create another lane. Empty
+context uses the general lane, while `Global` mode remains available as the
+Stage 2 control.
+
+The comparative experiment requires both scopes to learn the finance route.
+It fails if contextual learning weakens finance recall, if finance feedback
+changes untouched nature conductance, if nature stops selecting river, or if
+the durable fact count changes.
+
+## Stage 4: guarded context relay
+
+Exact lanes solve leakage by isolation, but isolation also blocks useful
+generalization. `GuardedRelay` replaces an exact context address with a bounded
+weighted field derived from the local bond graph. Weighted overlap determines
+how much conductance can cross between fields; overlap below the guard transfers
+nothing. Generic hubs are degree-penalized, trace count is finite, highly
+compatible traces merge, and half-life erosion still applies.
+
+The first comparison trained finance, tested related banking, and tested
+opposing nature under global, exact-context, and guarded-relay laws. Guarded
+relay improved banking recall and preserved nature recall without changing the
+20 durable facts. See [GUARDED-CONTEXT-RELAY.md](GUARDED-CONTEXT-RELAY.md) and
+`artifacts/stage4-guarded-relay-report.txt` for exact measurements.

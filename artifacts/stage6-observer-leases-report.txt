@@ -1,0 +1,31 @@
+Atom DB Stage 6 - observer leases
+Run date: 2026-07-20
+Command: cargo run --release -- lease-demo artifacts\stage6-observer-leases.atoms
+
+writer_exclusion=true
+reader_coexisted_with_writer=true
+baseline_visible=true
+stale_before_refresh=true
+frontier_advanced=true
+visible_after_refresh=true
+replacement_writer_opened=true
+observer_repaired_bytes=0
+observer_provisional_bytes=0
+facts=2
+frames=2
+verified=true
+
+Cross-process integration proof:
+- active writer process: acquired
+- competing writer process: rejected with Error::Busy
+- first reader process during writer: acquired
+- second reader process during writer: acquired
+- writer termination method: forced process kill
+- replacement writer after crash: acquired while reader remained alive
+- stale sidecar locks: none; no sidecar lock exists
+
+Additional recovery proof:
+- A read-only observer opened a deliberately incomplete cell.
+- The observer exposed only the earlier committed atom.
+- The observer reported the provisional byte tail and repaired zero bytes.
+- A writer opened alongside that observer and truncated exactly the open cell.

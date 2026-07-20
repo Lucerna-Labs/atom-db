@@ -25,6 +25,10 @@ If immutable distinctions can name themselves, durable facts can only follow fac
 cargo run --release -- demo artifacts\universe.atoms
 cargo run --release -- verify artifacts\universe.atoms
 cargo run --release -- cognitive-demo artifacts\cognitive-stage2.atoms
+cargo run --release -- context-demo artifacts\stage3-context-gating-final.atoms
+cargo run --release -- relay-demo artifacts\stage4-guarded-relay.atoms
+cargo run --release -- cell-demo artifacts\stage5-atomic-cells-final.atoms
+cargo run --release -- lease-demo artifacts\stage6-observer-leases.atoms
 ~~~
 
 Basic operations:
@@ -46,10 +50,20 @@ cargo run --release -- bonds data.atoms <source-id>
 5. Causal sequence numbers are contiguous and monotonic.
 6. Repeating an atom or bond changes no durable state.
 7. A torn final frame is removed; corruption inside a complete frame is never silently repaired.
+8. Facts inside an open cell are invisible until matching commit and begin membranes balance.
+9. Every root transition extends the prior root-version identity as a causal chain.
 
 ## Current boundary
 
-This is the first executable substrate, not yet a general-purpose replacement for established databases. It deliberately has a single writer, rebuilds its in-memory observation structure on open, supports outgoing traversal only, and does not yet compact or replicate. Those capabilities must emerge as separately falsifiable primitive layers rather than being smuggled into Stage 1.
+This is an executable local embedded substrate, not yet a general-purpose
+replacement for established databases. Stage 5 provides atomic multi-fact
+cells, append-only named roots, causal root history, and reconstructible
+snapshots. Stage 6 adds one nonblocking OS-held writer lease, concurrent
+read-only observers, non-destructive observation of provisional tails, and
+refreshable committed views. It still lacks full directional traversal, index
+checkpoints, compaction, and replication. Those capabilities must emerge as
+separately falsifiable primitive layers rather than being smuggled into the
+substrate.
 
 See [FIRST-PRINCIPLES.md](FIRST-PRINCIPLES.md) for the derivation and gates.
 
@@ -75,6 +89,34 @@ cognitive observation field. The first cognitive run learned a useful finance
 thread and also exposed a habit bias strong enough to override an opposing
 context. That mixed outcome is preserved as evidence under `artifacts/` rather
 than presented as a solved intelligence system.
+
+Stage 3 locally compares global plasticity with context-gated plasticity. Both
+learn the supervised finance route, but contextual lanes prevent that habit
+from leaking into an opposing nature context. Context identity is normalized as
+an order-independent, duplicate-free set.
+
+Stage 4 adds guarded context relay. It constructs bounded context fields from
+local graph topology, compares them with weighted overlap, and relays learned
+conductance only above a compatibility guard. In the first three-law run it
+improved an untrained but related banking recall while leaving the opposing
+nature context untouched. Traces merge only at high compatibility, decay with
+observation half-life, and obey a finite capacity with deterministic eviction.
+See [GUARDED-CONTEXT-RELAY.md](GUARDED-CONTEXT-RELAY.md) for the mechanism,
+numbers, and falsification boundary.
+
+Stage 5 adds atomic cells. Matching begin and commit membranes make a bounded
+group of atoms, bonds, and root transitions visible together. Incomplete cells
+are removed back to their opening boundary, while complete corruption still
+fails closed. Root transitions link to prior root-version identities, and
+historical snapshots can be reconstructed after reopening. See
+[ATOMIC-CELLS.md](ATOMIC-CELLS.md).
+
+Stage 6 adds observer leases. A single writer authority coexists with multiple
+read-only observers; a competing writer fails before file I/O, observers never
+repair provisional bytes, and the operating system releases the writer lease
+after a crash. A real child-process test verifies contention, concurrent
+readers, forced writer termination, and immediate lease recovery. See
+[OBSERVER-LEASES.md](OBSERVER-LEASES.md).
 
 ## License
 

@@ -1,0 +1,37 @@
+Atom DB Stage 5 - atomic cells
+Run date: 2026-07-20
+Command: cargo run --release -- cell-demo artifacts\stage5-atomic-cells-final.atoms
+
+first_cell=e20f481a851cbd3457a491f0cbd7f71d5c74d3867ef8d3a8a6ebcb8953328769
+first_commit_sequence=5
+second_cell=723467c907118e19e07a02c5fc68be5052dec9e61051815b6af69593153d9512
+second_commit_sequence=10
+first_snapshot_sequence=6
+second_snapshot_sequence=11
+first_snapshot_root=71c9bb70add9b686199c95a487380e950aa87b7bd7eebd4b56912620e6fa57b7
+second_snapshot_root=72b598e13503a67a0629d6730f7d43235bf3dea55d2b66ed90b7d7777dcd864a
+recovered_first_root=71c9bb70add9b686199c95a487380e950aa87b7bd7eebd4b56912620e6fa57b7
+recovered_current_root=72b598e13503a67a0629d6730f7d43235bf3dea55d2b66ed90b7d7777dcd864a
+root_history_versions=2
+atoms=4
+bonds=1
+roots=1
+root_updates=2
+cells=2
+facts=7
+frames=11
+durable_bytes=1632
+historical_snapshot_recovered=true
+current_snapshot_recovered=true
+snapshot_isolation_preserved=true
+cell_atomicity_verified=true
+verified=true
+
+Additional falsification evidence:
+- Eight cuts spanning partial begin membrane, complete begin membrane, partial
+  atom, complete atom, partial commit membrane, and final commit byte all
+  recovered exactly the earlier committed prefix.
+- A complete cell lacking its commit membrane exposed none of its contents.
+- Invalid in-cell references changed neither the observed state nor file length.
+- A repeated A-to-B root transition after an A/B cycle received a distinct
+  identity linked to the immediately preceding root-version identity.

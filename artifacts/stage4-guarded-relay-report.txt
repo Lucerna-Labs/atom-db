@@ -1,0 +1,47 @@
+Atom DB Stage 4 - guarded context relay
+Run date: 2026-07-20
+Command: cargo run --release -- relay-demo artifacts\stage4-guarded-relay.atoms
+
+global_nature_money_activation=250600
+global_nature_river_activation=149310
+exact_finance_money_activation=289310
+exact_finance_river_activation=110600
+exact_banking_money_activation=175000
+exact_banking_river_activation=175000
+exact_nature_money_activation=175000
+exact_nature_river_activation=236250
+relay_finance_money_activation=289310
+relay_finance_river_activation=110600
+relay_banking_money_activation=182700
+relay_banking_river_activation=168525
+relay_nature_money_activation=175000
+relay_nature_river_activation=236250
+relay_guard_per_mille=50
+finance_banking_compatibility_per_mille=103
+finance_nature_compatibility_per_mille=18
+exact_banking_bank_money_conductance=1000
+relay_finance_bank_money_conductance=1432
+relay_banking_bank_money_conductance=1044
+relay_nature_bank_money_conductance=1000
+relay_nature_bank_river_conductance=1000
+relay_context_traces=1
+relay_evicted_context_traces=0
+global_habit_crossed_context=true
+exact_related_transfer_absent=true
+relay_related_transfer_present=true
+relay_opposing_context_guarded=true
+relay_improved_related_recall=true
+relay_preserved_opposing_recall=true
+exact_preserved_opposing_recall=true
+durable_facts_before_cognition=20
+durable_facts_after_cognition=20
+immutable_truth_preserved=true
+verified=true
+
+Interpretation:
+- Global plasticity transferred a useful habit everywhere and corrupted the
+  opposing context.
+- Exact context lanes preserved the opposing context but could not generalize.
+- Guarded relay transferred a compatibility-weighted fraction to the related
+  banking field and rejected the nature field.
+- Cognitive observation did not alter the immutable truth substrate.
