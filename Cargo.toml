@@ -1,0 +1,20 @@
+[package]
+name = "atom-db"
+version = "0.1.0"
+edition = "2024"
+description = "A dependency-free, content-addressed database derived from first principles"
+license = "MIT"
+default-run = "atom-db"
+
+[lib]
+name = "atom_db"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atom-db"
+path = "src/main.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
