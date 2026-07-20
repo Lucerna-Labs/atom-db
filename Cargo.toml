@@ -6,6 +6,12 @@ description = "A dependency-free, content-addressed database derived from first 
 license = "MIT"
 default-run = "atom-db"
 
+[workspace]
+members = ["crates/atom-retrieval-field"]
+
+[dependencies]
+atom-retrieval-field = { path = "crates/atom-retrieval-field" }
+
 [lib]
 name = "atom_db"
 path = "src/lib.rs"

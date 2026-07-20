@@ -13,7 +13,9 @@ It does not begin with tables, rows, documents, indexes, SQL, transactions, clie
 - **persistence**: self-delimiting frames with independent content identity and frame-integrity verification;
 - **observation**: reconstruction of atoms and outgoing bonds from the durable fact stream.
 
-The implementation is Rust standard library only. `Cargo.toml` has no dependencies, and SHA-256 is implemented and tested in this repository.
+The implementation uses the Rust standard library and first-party workspace
+crates only. It has no third-party dependencies, and SHA-256 is implemented
+and tested in this repository.
 
 ## Hypothesis
 
@@ -29,6 +31,8 @@ cargo run --release -- context-demo artifacts\stage3-context-gating-final.atoms
 cargo run --release -- relay-demo artifacts\stage4-guarded-relay.atoms
 cargo run --release -- cell-demo artifacts\stage5-atomic-cells-final.atoms
 cargo run --release -- lease-demo artifacts\stage6-observer-leases.atoms
+cargo run --release -- remember artifacts\retrieval-local.atoms observer-leases.md "A writer crash releases its lease. Lease recovery permits a replacement writer."
+cargo run --release -- retrieve artifacts\retrieval-local.atoms "How does writer lease recovery work after a crash?"
 ~~~
 
 Basic operations:
@@ -39,6 +43,9 @@ cargo run --release -- put data.atoms Earth
 cargo run --release -- get data.atoms <64-hex-atom-id>
 cargo run --release -- bond data.atoms <source-id> <relation-id> <target-id>
 cargo run --release -- bonds data.atoms <source-id>
+cargo run --release -- remember data.atoms <source> <text...>
+cargo run --release -- remember-file data.atoms <source> <file>
+cargo run --release -- retrieve data.atoms <query...>
 ~~~
 
 ## Conservation laws
@@ -60,10 +67,11 @@ replacement for established databases. Stage 5 provides atomic multi-fact
 cells, append-only named roots, causal root history, and reconstructible
 snapshots. Stage 6 adds one nonblocking OS-held writer lease, concurrent
 read-only observers, non-destructive observation of provisional tails, and
-refreshable committed views. It still lacks full directional traversal, index
-checkpoints, compaction, and replication. Those capabilities must emerge as
-separately falsifiable primitive layers rather than being smuggled into the
-substrate.
+refreshable committed views. Stage 7 adds atomic passage encoding and bounded,
+multi-cue retrieval for LLM context. The storage substrate still lacks
+persistent reverse-traversal indexes, index checkpoints, compaction, and
+replication. Those capabilities must emerge as separately falsifiable
+primitive layers rather than being smuggled into the substrate.
 
 See [FIRST-PRINCIPLES.md](FIRST-PRINCIPLES.md) for the derivation and gates.
 
@@ -80,6 +88,21 @@ Cognitive measurements are derived and currently live only for the engine's
 lifetime. They cannot create, mutate, delete, or reinterpret durable facts.
 See [COGNITIVE-EXPERIMENT.md](COGNITIVE-EXPERIMENT.md) for its laws and
 falsification boundary.
+
+## Retrieval field
+
+The Stage 7 retrieval membrane stores a source, bounded passages, normalized
+term cues, and their bonds in one atomic cell. A query uses the same term
+transducer as ingestion, injects all known cues simultaneously, and propagates
+their signals through source-target arcs. Passages reached by several
+independent cues form intersections and outrank one-cue matches.
+
+Retrieval is read-only and returns a schema-1 JSON context packet containing
+bounded evidence text, source labels, cue support, activation measurements,
+and exact atom/bond threads. Unknown queries return
+`insufficient_evidence=true` instead of inventing context. The field is split
+into a focused first-party crate to preserve the 4,000-line crate ceiling. See
+[RETRIEVAL-FIELD.md](RETRIEVAL-FIELD.md).
 
 ## Experiment status
 
@@ -117,6 +140,14 @@ repair provisional bytes, and the operating system releases the writer lease
 after a crash. A real child-process test verifies contention, concurrent
 readers, forced writer termination, and immediate lease recovery. See
 [OBSERVER-LEASES.md](OBSERVER-LEASES.md).
+
+Stage 7 adds the first LLM retrieval membrane. The release experiment encoded
+two sourced passages, reopened the store read-only, and resolved a natural
+question through four independent cues converging on one passage. Each cue
+returned its exact bond thread. A query whose cues were absent produced no
+evidence and explicitly failed closed. The experiment is preserved under
+`artifacts/stage7-retrieval-field.atoms`; see
+[RETRIEVAL-FIELD.md](RETRIEVAL-FIELD.md) for the measured boundary.
 
 ## License
 
