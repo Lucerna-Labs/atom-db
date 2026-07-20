@@ -639,33 +639,95 @@ fn is_stop_word(term: &str) -> bool {
 }
 
 pub fn passages(text: &str, max_bytes: usize) -> Result<Vec<String>, String> {
+    passages_with_overlap(text, max_bytes, 0)
+}
+
+/// Segment text into bounded passage windows that share `overlap_bytes` of
+/// trailing context, so an answer spanning a hard boundary survives whole
+/// in the next window. Overlap is sentence-aligned when possible and the
+/// tail of the previous chunk; windows stay deterministic and bounded.
+pub fn passages_with_overlap(
+    text: &str,
+    max_bytes: usize,
+    overlap_bytes: usize,
+) -> Result<Vec<String>, String> {
     if max_bytes < 64 {
         return Err("passage size must be at least 64 bytes".into());
     }
-    let mut result = Vec::new();
-    let mut current = String::new();
+    if overlap_bytes >= max_bytes / 2 {
+        return Err("overlap must stay below half the passage size".into());
+    }
+    let mut sentences = Vec::new();
     for piece in text.split_inclusive(['.', '!', '?', '\n']) {
         let piece = piece.trim();
-        if piece.is_empty() {
-            continue;
+        if !piece.is_empty() {
+            sentences.push(piece.to_string());
         }
-        if !current.is_empty() && current.len() + 1 + piece.len() > max_bytes {
-            result.push(std::mem::take(&mut current));
-        }
-        if piece.len() <= max_bytes {
-            if !current.is_empty() {
-                current.push(' ');
-            }
-            current.push_str(piece);
-            continue;
-        }
-        if !current.is_empty() {
-            result.push(std::mem::take(&mut current));
-        }
-        split_long_piece(piece, max_bytes, &mut result);
     }
-    if !current.is_empty() {
-        result.push(current);
+    let mut result = Vec::new();
+    let mut start = 0;
+    while start < sentences.len() {
+        // Seed the window with the overlap tail of the previous window,
+        // always leaving room for the next fresh sentence.
+        let mut used = 0;
+        let mut window: Vec<&str> = Vec::new();
+        if start > 0 && overlap_bytes > 0 {
+            let reserved = max_bytes
+                .saturating_sub(sentences[start].len())
+                .saturating_sub(1);
+            let tail_budget = overlap_bytes.min(reserved);
+            let mut tail = Vec::new();
+            let mut tail_bytes = 0;
+            for sentence in sentences[..start].iter().rev() {
+                let extra = sentence.len() + usize::from(!tail.is_empty());
+                if tail_bytes + extra > tail_budget {
+                    break;
+                }
+                tail_bytes += extra;
+                tail.push(sentence.as_str());
+            }
+            for sentence in tail.into_iter().rev() {
+                used += sentence.len() + usize::from(used > 0);
+                window.push(sentence);
+            }
+        }
+        // Extend forward until the budget is full.
+        let mut end = start;
+        while end < sentences.len() {
+            let piece = &sentences[end];
+            let extra = piece.len() + usize::from(!window.is_empty());
+            if !window.is_empty() && used + extra > max_bytes && end > start {
+                break;
+            }
+            if piece.len() > max_bytes {
+                // Oversized sentence: emit what we have and split it hard.
+                if !window.is_empty() {
+                    result.push(window.join(" "));
+                    window = Vec::new();
+                }
+                let mut split = Vec::new();
+                split_long_piece(piece, max_bytes, &mut split);
+                for chunk in split {
+                    result.push(chunk);
+                }
+                end += 1;
+                start = end;
+                break;
+            }
+            used += extra;
+            window.push(piece);
+            end += 1;
+        }
+        if start == sentences.len() || (end == sentences.len() && !window.is_empty()) {
+            if !window.is_empty() {
+                result.push(window.join(" "));
+            }
+            break;
+        }
+        if !window.is_empty() {
+            result.push(window.join(" "));
+        }
+        start = end.max(start + 1);
     }
     Ok(result)
 }
@@ -829,5 +891,33 @@ mod tests {
         let chunks = passages(&"x".repeat(150), 64).unwrap();
         assert_eq!(chunks.len(), 3);
         assert!(chunks.iter().all(|chunk| chunk.len() <= 64));
+    }
+
+    #[test]
+    fn overlapping_windows_keep_boundary_answers_whole() {
+        // Two sentences that do not fit in one window: the answer sentence
+        // must reappear with its context in the following window.
+        let document = format!(
+            "{}. The lease recovers after the crash. {}.",
+            "setup context ".repeat(8).trim(),
+            "trailing detail ".repeat(8).trim()
+        );
+        let windows = passages_with_overlap(&document, 120, 60).unwrap();
+        assert!(windows.len() >= 2);
+        assert!(windows.iter().all(|window| window.len() <= 120));
+        // The boundary sentence appears in two consecutive windows.
+        let appearances = windows
+            .iter()
+            .filter(|window| window.contains("The lease recovers after the crash."))
+            .count();
+        assert!(
+            appearances >= 2,
+            "the boundary sentence must survive in overlapping windows: {windows:?}"
+        );
+        // No information is duplicated beyond the overlap allowance.
+        assert_eq!(
+            passages_with_overlap(&document, 120, 0).unwrap(),
+            passages(&document, 120).unwrap()
+        );
     }
 }

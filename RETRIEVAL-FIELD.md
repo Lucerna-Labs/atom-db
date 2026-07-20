@@ -146,8 +146,11 @@ measurement record is `artifacts/stage7-retrieval-field-report.txt`.
 This stage establishes bounded lexical graph retrieval, not general semantic
 understanding. It currently:
 
-- rebuilds the derived graph from all bonds for each query;
-- has no persistent reverse index or checkpoint;
+- ~~rebuilds the derived graph from all bonds for each query~~ **(resolved in
+  Stage 8: the index is cached against the snapshot sequence)**
+- ~~has no persistent reverse index or checkpoint~~ **(partially resolved in
+  Stage 8: an in-process derived index with rebuild telemetry; a durable
+  checkpoint remains open)**
 - uses conservative lexical normalization rather than embeddings;
 - does not infer synonyms unless semantic bonds encode them;
 - does not persist cognitive conductance learning;
@@ -157,3 +160,6 @@ The next experiment should only add a capability if it has a measurable law.
 Candidate laws include incremental traversal indexes, information-gain ranking,
 and explicit feedback persistence. External embeddings, if explored, should be
 optional on-ramps and must never become part of durable fact identity.
+
+See [STAGE-8-INDEX-GAIN-OVERLAP.md](STAGE-8-INDEX-GAIN-OVERLAP.md) for the
+resolved index, information-gain, and overlapping-window laws.

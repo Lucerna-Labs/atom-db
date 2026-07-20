@@ -1,7 +1,10 @@
 use crate::{AtomDb, Bond, Cell, CellReceipt, Digest, Error};
-use atom_retrieval_field::{Arc, Cue, FieldConfig, FieldReport, activate, passages, terms};
+use atom_retrieval_field::{
+    Arc, Cue, FieldConfig, FieldReport, activate, passages_with_overlap, terms,
+};
 pub use atom_retrieval_field::{ContextPacket, Evidence, EvidenceThread, RetrievalCue};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Mutex;
 
 const TERM_DOMAIN: &[u8] = b"atom-db/retrieval/term/v1\0";
 const MENTIONS: &[u8] = b"atom-db/retrieval/mentions/v1";
@@ -17,6 +20,13 @@ pub struct RetrievalConfig {
     pub max_evidence: usize,
     pub max_context_bytes: usize,
     pub minimum_cue_support: usize,
+    /// Trailing bytes shared between consecutive passages so an answer
+    /// spanning a boundary survives whole in the next window. Zero keeps
+    /// the pre-Stage-8 hard-boundary behavior.
+    pub passage_overlap_bytes: usize,
+    /// Stage 8: rare cues inject more activation (document-frequency
+    /// information gain) instead of a flat signal per term.
+    pub information_gain: bool,
 }
 
 impl Default for RetrievalConfig {
@@ -30,6 +40,8 @@ impl Default for RetrievalConfig {
             max_evidence: 8,
             max_context_bytes: 8 * 1024,
             minimum_cue_support: 2,
+            passage_overlap_bytes: 128,
+            information_gain: true,
         }
     }
 }
@@ -39,6 +51,9 @@ impl RetrievalConfig {
         self.field.validate()?;
         if !(64..=65_536).contains(&self.passage_bytes) {
             return Err("passage bytes must be between 64 and 65536".into());
+        }
+        if self.passage_overlap_bytes >= self.passage_bytes / 2 {
+            return Err("passage overlap must stay below half the passage size".into());
         }
         if self.max_document_bytes < self.passage_bytes {
             return Err("document budget must cover at least one passage".into());
@@ -68,16 +83,46 @@ pub struct RememberReceipt {
     pub unique_terms: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+/// Stage 8 derived index: the retrieval graph plus per-term document
+/// frequency, rebuilt only when the durable snapshot sequence changes.
+/// A query against an unchanged snapshot pays no rebuild.
+#[derive(Debug, Default)]
+struct DerivedIndex {
+    snapshot_sequence: u64,
+    nodes: Vec<Digest>,
+    node_index: BTreeMap<Digest, usize>,
+    edges: Vec<Arc>,
+    edge_ids: Vec<Digest>,
+    passage_ids: BTreeSet<Digest>,
+    passage_sources: BTreeMap<Digest, BTreeSet<Digest>>,
+    /// mentions-bond count per term atom (document frequency).
+    term_passages: BTreeMap<Digest, u64>,
+    /// How many times this index has been rebuilt (telemetry for the
+    /// unchanged-snapshot law).
+    rebuilds: usize,
+}
+
+#[derive(Debug)]
 pub struct Retriever {
     config: RetrievalConfig,
+    index: Mutex<DerivedIndex>,
 }
 
 impl Retriever {
     pub fn new(config: RetrievalConfig) -> Result<Self, String> {
         Ok(Self {
             config: config.validate()?,
+            index: Mutex::new(DerivedIndex::default()),
         })
+    }
+
+    /// How many times the derived index has been rebuilt. After the first
+    /// query, an unchanged snapshot must never move this counter.
+    pub fn index_rebuilds(&self) -> usize {
+        self.index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .rebuilds
     }
 
     pub fn remember(
@@ -96,8 +141,12 @@ impl Retriever {
                 "document exceeds retrieval ingestion budget".into(),
             ));
         }
-        let passage_texts =
-            passages(document, self.config.passage_bytes).map_err(Error::Invalid)?;
+        let passage_texts = passages_with_overlap(
+            document,
+            self.config.passage_bytes,
+            self.config.passage_overlap_bytes,
+        )
+        .map_err(Error::Invalid)?;
         let mut cell = db.begin_cell();
         let source = cell.put_atom(source.as_bytes());
         let mentions = cell.put_atom(MENTIONS);
@@ -134,76 +183,50 @@ impl Retriever {
 
     pub fn retrieve(&self, db: &mut AtomDb, query: &str) -> Result<ContextPacket<Digest>, Error> {
         let snapshot_sequence = db.snapshot().sequence();
-        let query_terms = terms(query, self.config.max_query_terms);
-        let mentions = identity(MENTIONS);
-        let from_source = identity(FROM_SOURCE);
-        let mut nodes = Vec::new();
-        let mut node_index = BTreeMap::new();
-        let mut edges = Vec::new();
-        let mut edge_ids = Vec::new();
-        let mut passage_ids = BTreeSet::new();
-        let mut passage_sources: BTreeMap<Digest, BTreeSet<Digest>> = BTreeMap::new();
-        for (edge_id, bond) in db.all_bonds() {
-            let source = intern(bond.source, &mut nodes, &mut node_index);
-            let target = intern(bond.target, &mut nodes, &mut node_index);
-            let conductance = if bond.relation == mentions {
-                passage_ids.insert(bond.target);
-                1_400
-            } else if bond.relation == from_source {
-                passage_sources
-                    .entry(bond.source)
-                    .or_default()
-                    .insert(bond.target);
-                600
-            } else {
-                900
-            };
-            let edge = edge_ids.len();
-            edge_ids.push(edge_id);
-            edges.push(Arc {
-                from: source,
-                to: target,
-                edge,
-                conductance_per_mille: conductance,
-            });
-            edges.push(Arc {
-                from: target,
-                to: source,
-                edge,
-                conductance_per_mille: conductance,
-            });
+        let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+        if index.snapshot_sequence != snapshot_sequence {
+            let rebuilds = index.rebuilds + 1;
+            *index = build_index(db, snapshot_sequence)?;
+            index.rebuilds = rebuilds;
         }
+        let index = &*index;
 
+        let query_terms = terms(query, self.config.max_query_terms);
         let mut cues = Vec::new();
         let mut field_cues = Vec::new();
         let mut known_terms = Vec::new();
+        let total_passages = index.passage_ids.len() as u64;
         for term in query_terms {
             let identity = identity(&term_bytes(&term));
-            let node = node_index.get(&identity).copied();
+            let node = index.node_index.get(&identity).copied();
             cues.push(RetrievalCue {
                 term: term.clone(),
                 identity,
                 known: node.is_some(),
             });
             if let Some(node) = node {
-                known_terms.push(term);
-                field_cues.push(Cue {
-                    node,
-                    activation: 1_000_000,
-                });
+                known_terms.push(term.clone());
+                let activation = cue_activation(
+                    identity,
+                    total_passages,
+                    index,
+                    self.config.information_gain,
+                );
+                field_cues.push(Cue { node, activation });
             }
         }
-        let field = activate(&edges, &field_cues, self.config.field).map_err(Error::Invalid)?;
+        let field =
+            activate(&index.edges, &field_cues, self.config.field).map_err(Error::Invalid)?;
         self.packet(
             db,
             query,
             snapshot_sequence,
             cues,
             known_terms,
-            nodes,
-            edge_ids,
-            passage_ids,
-            passage_sources,
+            &index.nodes,
+            &index.edge_ids,
+            &index.passage_ids,
+            &index.passage_sources,
             field,
         )
     }
@@ -216,10 +239,10 @@ impl Retriever {
         snapshot_sequence: u64,
         cues: Vec<RetrievalCue<Digest>>,
         known_terms: Vec<String>,
-        nodes: Vec<Digest>,
-        edge_ids: Vec<Digest>,
-        passage_ids: BTreeSet<Digest>,
-        passage_sources: BTreeMap<Digest, BTreeSet<Digest>>,
+        nodes: &[Digest],
+        edge_ids: &[Digest],
+        passage_ids: &BTreeSet<Digest>,
+        passage_sources: &BTreeMap<Digest, BTreeSet<Digest>>,
         field: FieldReport,
     ) -> Result<ContextPacket<Digest>, Error> {
         let mut evidence = Vec::new();
@@ -314,6 +337,72 @@ impl Default for Retriever {
     }
 }
 
+/// Rebuild the derived index from the committed bond set. Called only when
+/// the snapshot sequence moved.
+fn build_index(db: &mut AtomDb, snapshot_sequence: u64) -> Result<DerivedIndex, Error> {
+    let mentions = identity(MENTIONS);
+    let from_source = identity(FROM_SOURCE);
+    let mut index = DerivedIndex {
+        snapshot_sequence,
+        ..DerivedIndex::default()
+    };
+    for (edge_id, bond) in db.all_bonds() {
+        let source = intern(bond.source, &mut index.nodes, &mut index.node_index);
+        let target = intern(bond.target, &mut index.nodes, &mut index.node_index);
+        let conductance = if bond.relation == mentions {
+            index.passage_ids.insert(bond.target);
+            *index.term_passages.entry(bond.source).or_insert(0) += 1;
+            1_400
+        } else if bond.relation == from_source {
+            index
+                .passage_sources
+                .entry(bond.source)
+                .or_default()
+                .insert(bond.target);
+            600
+        } else {
+            900
+        };
+        let edge = index.edge_ids.len();
+        index.edge_ids.push(edge_id);
+        index.edges.push(Arc {
+            from: source,
+            to: target,
+            edge,
+            conductance_per_mille: conductance,
+        });
+        index.edges.push(Arc {
+            from: target,
+            to: source,
+            edge,
+            conductance_per_mille: conductance,
+        });
+    }
+    Ok(index)
+}
+
+/// Stage 8 information gain: a cue's injected activation scales with how
+/// rare its term is across the committed passages (1 + log2(1 + N/df)).
+/// With information gain disabled, every cue injects the flat pre-Stage-8
+/// signal. Deterministic for a given snapshot and configuration.
+fn cue_activation(
+    term: Digest,
+    total_passages: u64,
+    index: &DerivedIndex,
+    information_gain: bool,
+) -> u64 {
+    const BASE: u64 = 1_000_000;
+    if !information_gain {
+        return BASE;
+    }
+    let df = index.term_passages.get(&term).copied().unwrap_or(0);
+    if total_passages == 0 || df == 0 {
+        return BASE;
+    }
+    let gain = 1.0 + (1.0 + total_passages as f64 / df as f64).log2();
+    (BASE as f64 * gain) as u64
+}
+
 fn identity(bytes: &[u8]) -> Digest {
     Cell::new().put_atom(bytes)
 }
@@ -404,6 +493,70 @@ mod tests {
         assert!(packet.insufficient_evidence);
         assert!(packet.evidence.is_empty());
         assert!(packet.cues.iter().all(|cue| !cue.known));
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unchanged_snapshot_never_rebuilds_the_index() {
+        let path = path("cache-law");
+        let mut db = AtomDb::open(&path).unwrap();
+        let retriever = Retriever::default();
+        retriever
+            .remember(&mut db, "a.md", "leases recover after writer crashes.")
+            .unwrap();
+        assert_eq!(retriever.index_rebuilds(), 0);
+        retriever.retrieve(&mut db, "writer crash lease").unwrap();
+        assert_eq!(retriever.index_rebuilds(), 1);
+        // Unchanged snapshot: identical result, no rebuild.
+        let first = retriever.retrieve(&mut db, "writer crash lease").unwrap();
+        let second = retriever.retrieve(&mut db, "writer crash lease").unwrap();
+        assert_eq!(first, second);
+        assert_eq!(retriever.index_rebuilds(), 1);
+        // A committed change moves the snapshot and forces one rebuild.
+        retriever
+            .remember(&mut db, "b.md", "astronomy has nothing to do with leases.")
+            .unwrap();
+        retriever.retrieve(&mut db, "writer crash lease").unwrap();
+        assert_eq!(retriever.index_rebuilds(), 2);
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn rare_cues_inject_more_activation_than_common_cues() {
+        let path = path("gain-law");
+        let mut db = AtomDb::open(&path).unwrap();
+        let retriever = Retriever::default();
+        // "common" appears in every passage; "zephyr" appears in exactly one.
+        retriever
+            .remember(&mut db, "d1.md", "common words everywhere. common again.")
+            .unwrap();
+        retriever
+            .remember(&mut db, "d2.md", "common ground, common sense.")
+            .unwrap();
+        retriever
+            .remember(&mut db, "d3.md", "a zephyr is anything but common.")
+            .unwrap();
+        let packet = retriever.retrieve(&mut db, "common zephyr").unwrap();
+        assert!(packet.answerable);
+        // The passage supported by the rare cue must win despite the common
+        // term appearing in three times as many passages.
+        assert_eq!(packet.evidence[0].sources, vec!["d3.md"]);
+        assert!(
+            packet.evidence[0]
+                .supporting_cues
+                .contains(&"zephyr".to_string())
+        );
+        // Direct law check: the rare cue's injected activation dominates.
+        let index = retriever.index.lock().unwrap_or_else(|e| e.into_inner());
+        let total = index.passage_ids.len() as u64;
+        let zephyr = identity(&term_bytes("zephyr"));
+        let common = identity(&term_bytes("common"));
+        let rare_activation = cue_activation(zephyr, total, &index, true);
+        let common_activation = cue_activation(common, total, &index, true);
+        assert!(rare_activation > common_activation);
+        drop(index);
         drop(db);
         fs::remove_file(path).unwrap();
     }
