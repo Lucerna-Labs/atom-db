@@ -153,7 +153,8 @@ understanding. It currently:
   checkpoint remains open)**
 - uses conservative lexical normalization rather than embeddings;
 - does not infer synonyms unless semantic bonds encode them;
-- does not persist cognitive conductance learning;
+- ~~does not persist cognitive conductance learning~~ **(resolved in Stage 9:
+  reinforcement is a durable fact — see [STAGE-9-FEEDBACK-LOOP.md](STAGE-9-FEEDBACK-LOOP.md))**;
 - returns evidence but does not invoke or supervise an LLM.
 
 The next experiment should only add a capability if it has a measurable law.

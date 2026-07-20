@@ -72,7 +72,7 @@ This stage does not yet provide:
 
 - a causal-order incremental index (the store exposes bonds in hash order;
   the cache rebuilds on change rather than appending);
-- conductance learning from retrieval outcomes (the feedback loop — the
-  next candidate law, and the Ordo Pro integration hook);
+- ~~conductance learning from retrieval outcomes~~ **(resolved in Stage 9:
+  the feedback loop — see [STAGE-9-FEEDBACK-LOOP.md](STAGE-9-FEEDBACK-LOOP.md))**;
 - synonym or alias bonds (recall still depends on shared surface terms);
 - embeddings of any kind.

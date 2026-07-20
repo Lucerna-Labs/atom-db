@@ -80,6 +80,28 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let packet = Retriever::default().retrieve(&mut db, &query.join(" "))?;
             println!("{}", packet.to_json());
         }
+        [command, path, passage, polarity @ ..]
+            if command == "reinforce" && polarity.len() <= 1 =>
+        {
+            let polarity = match polarity.first().map(String::as_str) {
+                None => atom_db::Polarity::Strengthen,
+                Some("strengthen") => atom_db::Polarity::Strengthen,
+                Some("weaken") => atom_db::Polarity::Weaken,
+                Some(other) => return Err(format!("unknown polarity '{other}'").into()),
+            };
+            let passage = passage.parse::<Digest>()?;
+            let mut db = AtomDb::open_writer(path)?;
+            let receipt = Retriever::default().reinforce(&mut db, passage, polarity)?;
+            println!("cell={}", receipt.cell.identity);
+            println!("passage={}", receipt.passage);
+            println!("polarity={:?}", receipt.polarity);
+            println!("count={}", receipt.count);
+            println!(
+                "effective_delta_per_mille={}",
+                receipt.effective_delta_per_mille
+            );
+            println!("verified=true");
+        }
         [command, path] if command == "stats" => print_store_stats(&AtomDb::open_read_only(path)?)?,
         [command, path] if command == "verify" => print_store_stats(&AtomDb::open_writer(path)?)?,
         [command, path] if command == "demo" => demo(path)?,
@@ -588,6 +610,7 @@ fn refuse_overwrite(path: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn print_usage() {
     eprintln!(
         "Atom DB - dependency-free immutable fact substrate\n\n\
-usage:\n  atom-db init <store>\n  atom-db put <store> <text...>\n  atom-db put-file <store> <file>\n  atom-db get <store> <atom-id>\n  atom-db bond <store> <source-id> <relation-id> <target-id>\n  atom-db bonds <store> <source-id>\n  atom-db remember <store> <source> <text...>\n  atom-db remember-file <store> <source> <file>\n  atom-db retrieve <store> <query...>\n  atom-db stats <store>\n  atom-db verify <store>\n  atom-db demo <new-store>\n  atom-db cognitive-demo <new-store>\n  atom-db context-demo <new-store>\n  atom-db relay-demo <new-store>\n  atom-db cell-demo <new-store>\n  atom-db lease-demo <new-store>"
+usage:\n  atom-db init <store>\n  atom-db put <store> <text...>\n  atom-db put-file <store> <file>\n  atom-db get <store> <atom-id>\n  atom-db bond <store> <source-id> <relation-id> <target-id>\n  atom-db bonds <store> <source-id>\n  atom-db remember <store> <source> <text...>\n  atom-db remember-file <store> <source> <file>\n  atom-db retrieve <store> <query...>
+  atom-db reinforce <store> <passage-id> [strengthen|weaken]\n  atom-db stats <store>\n  atom-db verify <store>\n  atom-db demo <new-store>\n  atom-db cognitive-demo <new-store>\n  atom-db context-demo <new-store>\n  atom-db relay-demo <new-store>\n  atom-db cell-demo <new-store>\n  atom-db lease-demo <new-store>"
     );
 }

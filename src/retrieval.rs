@@ -9,6 +9,52 @@ use std::sync::Mutex;
 const TERM_DOMAIN: &[u8] = b"atom-db/retrieval/term/v1\0";
 const MENTIONS: &[u8] = b"atom-db/retrieval/mentions/v1";
 const FROM_SOURCE: &[u8] = b"atom-db/retrieval/from-source/v1";
+const FEEDBACK_DOMAIN: &str = "atom-db/retrieval/feedback/v1";
+const FEEDBACK_MARKER: &[u8] = b"atom-db/retrieval/feedback-marker/v1";
+
+/// Conductance deltas per feedback count (per mille).
+const STRENGTHEN_DELTA: i64 = 250;
+const WEAKEN_DELTA: i64 = 400;
+const MENTIONS_BASE: i64 = 1_400;
+const MAX_CONDUCTANCE: i64 = 4_000;
+
+/// The polarity of a reinforcement event.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Polarity {
+    /// The evidence helped: its mention arcs gain conductance.
+    Strengthen,
+    /// The evidence misled: its mention arcs lose conductance.
+    Weaken,
+}
+
+impl Polarity {
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Strengthen => "strengthen",
+            Self::Weaken => "weaken",
+        }
+    }
+
+    fn from_slug(slug: &str) -> Option<Self> {
+        match slug {
+            "strengthen" => Some(Self::Strengthen),
+            "weaken" => Some(Self::Weaken),
+            _ => None,
+        }
+    }
+}
+
+/// What one reinforcement event committed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReinforceReceipt {
+    pub cell: CellReceipt,
+    pub passage: Digest,
+    pub polarity: Polarity,
+    /// The new feedback count for this (passage, polarity) pair.
+    pub count: u64,
+    /// Effective per-mille shift now applied to the passage's mention arcs.
+    pub effective_delta_per_mille: i64,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RetrievalConfig {
@@ -97,6 +143,8 @@ struct DerivedIndex {
     passage_sources: BTreeMap<Digest, BTreeSet<Digest>>,
     /// mentions-bond count per term atom (document frequency).
     term_passages: BTreeMap<Digest, u64>,
+    /// Latest feedback counts per passage: (strengthen, weaken).
+    feedback: BTreeMap<Digest, (u64, u64)>,
     /// How many times this index has been rebuilt (telemetry for the
     /// unchanged-snapshot law).
     rebuilds: usize,
@@ -178,6 +226,60 @@ impl Retriever {
             source,
             passages: passage_ids,
             unique_terms: unique_terms.len(),
+        })
+    }
+
+    /// Stage 9 feedback loop: record one reinforcement event for a passage
+    /// as a durable, atomic fact. Retrieval never writes; reinforcement is
+    /// the only write path and it is always explicit. Each event bumps the
+    /// (passage, polarity) count; the derived index folds the effective
+    /// delta into the passage's mention-arc conductance on the next rebuild.
+    pub fn reinforce(
+        &self,
+        db: &mut AtomDb,
+        passage: Digest,
+        polarity: Polarity,
+    ) -> Result<ReinforceReceipt, Error> {
+        if !db.contains_atom(passage) {
+            return Err(Error::Invalid(
+                "cannot reinforce an atom that does not exist".into(),
+            ));
+        }
+        let current = {
+            let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+            let snapshot_sequence = db.snapshot().sequence();
+            if index.snapshot_sequence != snapshot_sequence {
+                let rebuilds = index.rebuilds + 1;
+                *index = build_index(db, snapshot_sequence)?;
+                index.rebuilds = rebuilds;
+            }
+            let (strengthen, weaken) = index.feedback.get(&passage).copied().unwrap_or((0, 0));
+            match polarity {
+                Polarity::Strengthen => strengthen,
+                Polarity::Weaken => weaken,
+            }
+        };
+        let count = current + 1;
+        let relation = format!("{FEEDBACK_DOMAIN}/{}/{count}", polarity.slug());
+        let mut cell = db.begin_cell();
+        let relation_id = cell.put_atom(relation.as_bytes());
+        let marker = cell.put_atom(FEEDBACK_MARKER);
+        cell.put_bond(Bond {
+            source: passage,
+            relation: relation_id,
+            target: marker,
+        });
+        let cell = db.commit_cell(cell)?;
+        db.sync()?;
+        Ok(ReinforceReceipt {
+            cell,
+            passage,
+            polarity,
+            count,
+            effective_delta_per_mille: effective_delta(match polarity {
+                Polarity::Strengthen => (count, 0),
+                Polarity::Weaken => (0, count),
+            }),
         })
     }
 
@@ -338,7 +440,8 @@ impl Default for Retriever {
 }
 
 /// Rebuild the derived index from the committed bond set. Called only when
-/// the snapshot sequence moved.
+/// the snapshot sequence moved. Two passes over the in-memory bond list:
+/// feedback counts first (hash order puts them anywhere), then arcs.
 fn build_index(db: &mut AtomDb, snapshot_sequence: u64) -> Result<DerivedIndex, Error> {
     let mentions = identity(MENTIONS);
     let from_source = identity(FROM_SOURCE);
@@ -346,13 +449,38 @@ fn build_index(db: &mut AtomDb, snapshot_sequence: u64) -> Result<DerivedIndex, 
         snapshot_sequence,
         ..DerivedIndex::default()
     };
-    for (edge_id, bond) in db.all_bonds() {
+    let bonds = db.all_bonds();
+    // Pass 1: fold feedback events into per-passage counts. Feedback bonds
+    // never enter the traversal graph as ordinary arcs.
+    let mut feedback_bonds = BTreeSet::new();
+    for (edge_id, bond) in &bonds {
+        if let Some(bytes) = db.get_atom(bond.relation)?
+            && let Some((polarity, count)) = parse_feedback(&bytes)
+        {
+            let entry = index.feedback.entry(bond.source).or_insert((0, 0));
+            match polarity {
+                Polarity::Strengthen => entry.0 = entry.0.max(count),
+                Polarity::Weaken => entry.1 = entry.1.max(count),
+            }
+            feedback_bonds.insert(*edge_id);
+        }
+    }
+    // Pass 2: build the traversal graph; reinforcement shifts only arcs
+    // INTO a reinforced passage.
+    let boost = |to: Digest| -> i64 {
+        let (strengthen, weaken) = index.feedback.get(&to).copied().unwrap_or((0, 0));
+        effective_delta((strengthen, weaken))
+    };
+    for (edge_id, bond) in &bonds {
+        if feedback_bonds.contains(edge_id) {
+            continue;
+        }
         let source = intern(bond.source, &mut index.nodes, &mut index.node_index);
         let target = intern(bond.target, &mut index.nodes, &mut index.node_index);
         let conductance = if bond.relation == mentions {
             index.passage_ids.insert(bond.target);
             *index.term_passages.entry(bond.source).or_insert(0) += 1;
-            1_400
+            MENTIONS_BASE
         } else if bond.relation == from_source {
             index
                 .passage_sources
@@ -364,21 +492,35 @@ fn build_index(db: &mut AtomDb, snapshot_sequence: u64) -> Result<DerivedIndex, 
             900
         };
         let edge = index.edge_ids.len();
-        index.edge_ids.push(edge_id);
+        index.edge_ids.push(*edge_id);
+        let into = (conductance + boost(bond.target)).clamp(1, MAX_CONDUCTANCE) as u16;
         index.edges.push(Arc {
             from: source,
             to: target,
             edge,
-            conductance_per_mille: conductance,
+            conductance_per_mille: into,
         });
         index.edges.push(Arc {
             from: target,
             to: source,
             edge,
-            conductance_per_mille: conductance,
+            conductance_per_mille: conductance as u16,
         });
     }
     Ok(index)
+}
+
+/// Parse a feedback relation atom: `<domain>/<polarity>/<count>`.
+fn parse_feedback(bytes: &[u8]) -> Option<(Polarity, u64)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let tail = text.strip_prefix(FEEDBACK_DOMAIN)?;
+    let (polarity, count) = tail.strip_prefix('/')?.split_once('/')?;
+    Some((Polarity::from_slug(polarity)?, count.parse().ok()?))
+}
+
+/// Effective per-mille conductance shift for a (strengthen, weaken) pair.
+fn effective_delta(counts: (u64, u64)) -> i64 {
+    counts.0 as i64 * STRENGTHEN_DELTA - counts.1 as i64 * WEAKEN_DELTA
 }
 
 /// Stage 8 information gain: a cue's injected activation scales with how
@@ -557,6 +699,159 @@ mod tests {
         let common_activation = cue_activation(common, total, &index, true);
         assert!(rare_activation > common_activation);
         drop(index);
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn reinforcement_lifts_helpful_evidence_and_is_durable() {
+        let path = path("feedback-strengthen");
+        let mut db = AtomDb::open(&path).unwrap();
+        let retriever = Retriever::default();
+        // Two competing passages about "lease": one strong (multi-cue), one
+        // weak (single cue, off-topic tail).
+        let strong = retriever.remember(
+            &mut db, "strong.md",
+            "A writer crash makes the operating system release its lease. Lease recovery permits a replacement writer.",
+        ).unwrap();
+        let weak = retriever
+            .remember(&mut db, "weak.md", "The lease expired quietly.")
+            .unwrap();
+        let before = retriever
+            .retrieve(&mut db, "writer crash lease recovery")
+            .unwrap();
+        assert_eq!(before.evidence[0].sources, vec!["strong.md"]);
+        let weak_activation_before = before
+            .evidence
+            .iter()
+            .find(|item| item.sources == vec!["weak.md"])
+            .map(|item| item.activation)
+            .unwrap_or(0);
+
+        // Reinforce the weak passage as if it kept helping.
+        let mut receipt = retriever
+            .reinforce(&mut db, weak.passages[0], Polarity::Strengthen)
+            .unwrap();
+        assert_eq!(receipt.count, 1);
+        assert_eq!(receipt.effective_delta_per_mille, STRENGTHEN_DELTA);
+        receipt = retriever
+            .reinforce(&mut db, weak.passages[0], Polarity::Strengthen)
+            .unwrap();
+        assert_eq!(receipt.count, 2);
+
+        let after = retriever
+            .retrieve(&mut db, "writer crash lease recovery")
+            .unwrap();
+        let weak_after = after
+            .evidence
+            .iter()
+            .find(|item| item.sources == vec!["weak.md"])
+            .expect("weak passage must still surface");
+        assert!(
+            weak_after.activation > weak_activation_before,
+            "reinforcement must lift activation: before={weak_activation_before} after={}",
+            weak_after.activation
+        );
+
+        // Durability: the feedback survives a reopen.
+        let strong_id = strong.passages[0];
+        let weak_id = weak.passages[0];
+        drop(db);
+        let mut db = AtomDb::open_read_only(&path).unwrap();
+        let reopened = retriever
+            .retrieve(&mut db, "writer crash lease recovery")
+            .unwrap();
+        let weak_reopened = reopened
+            .evidence
+            .iter()
+            .find(|item| item.identity == weak_id)
+            .expect("reinforced passage must survive reopen");
+        assert!(weak_reopened.activation > weak_activation_before);
+        // The unreinforced passage keeps its base conductance effect.
+        assert!(
+            reopened
+                .evidence
+                .iter()
+                .any(|item| item.identity == strong_id)
+        );
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn weakening_buries_misleading_evidence() {
+        let path = path("feedback-weaken");
+        let mut db = AtomDb::open(&path).unwrap();
+        let retriever = Retriever::default();
+        let receipt = retriever
+            .remember(
+                &mut db,
+                "mislead.md",
+                "Lease recovery after a crash is simple: just reboot everything, always.",
+            )
+            .unwrap();
+        retriever
+            .remember(
+                &mut db,
+                "careful.md",
+                "A writer crash releases its lease; a replacement writer may recover.",
+            )
+            .unwrap();
+        let before = retriever
+            .retrieve(&mut db, "lease crash recovery writer")
+            .unwrap();
+        let target = before
+            .evidence
+            .iter()
+            .find(|item| item.sources == vec!["mislead.md"])
+            .expect("misleading passage must surface before suppression");
+        let activation_before = target.activation;
+
+        for _ in 0..4 {
+            retriever
+                .reinforce(&mut db, receipt.passages[0], Polarity::Weaken)
+                .unwrap();
+        }
+        let after = retriever
+            .retrieve(&mut db, "lease crash recovery writer")
+            .unwrap();
+        let suppressed = after
+            .evidence
+            .iter()
+            .find(|item| item.sources == vec!["mislead.md"]);
+        match suppressed {
+            Some(item) => assert!(
+                item.activation < activation_before,
+                "weakening must drop activation: before={activation_before} after={}",
+                item.activation
+            ),
+            None => {
+                // Clamped to the minimum and outranked out of the packet:
+                // also a lawful burial.
+            }
+        }
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn reinforce_rejects_unknown_atoms_and_queries_stay_read_only() {
+        let path = path("feedback-guards");
+        let mut db = AtomDb::open(&path).unwrap();
+        let retriever = Retriever::default();
+        let missing = Cell::new().put_atom(b"no such passage");
+        assert!(
+            retriever
+                .reinforce(&mut db, missing, Polarity::Strengthen)
+                .is_err()
+        );
+        retriever
+            .remember(&mut db, "a.md", "leases recover after writer crashes.")
+            .unwrap();
+        let before = db.stats().unwrap();
+        retriever.retrieve(&mut db, "writer crash lease").unwrap();
+        let after = db.stats().unwrap();
+        assert_eq!(before, after, "queries must never mutate durable state");
         drop(db);
         fs::remove_file(path).unwrap();
     }
