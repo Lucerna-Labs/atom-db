@@ -1,0 +1,34 @@
+experiment=stage3-context-gating
+command=cargo run --release -- context-demo artifacts\stage3-context-gating-final.atoms
+status=passed_narrow_context_gate
+
+feedback_context=finance
+feedback_target=money
+feedback_observations=8
+
+global_finance_money_activation=328020
+global_finance_river_activation=110600
+global_nature_money_activation=250600
+global_nature_river_activation=188020
+
+contextual_finance_money_activation=328020
+contextual_finance_river_activation=110600
+contextual_nature_money_activation=175000
+contextual_nature_river_activation=297500
+
+global_bank_money_conductance=1432
+global_bank_river_conductance=632
+finance_bank_money_conductance=1432
+nature_bank_money_conductance=1000
+nature_bank_river_conductance=1000
+
+global_habit_crossed_context=true
+context_gate_preserved_nature=true
+context_is_order_independent=true
+context_is_duplicate_free=true
+durable_facts_before_cognition=10
+durable_facts_after_cognition=10
+immutable_truth_preserved=true
+
+operator_disposition=retain_for_more_falsification
+boundary=Exact context sets can proliferate lanes and no safe cross-context generalization law has been established.
