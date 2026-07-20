@@ -16,7 +16,7 @@ pub use cognitive::{
 };
 pub use digest::{Digest, digest};
 pub use retrieval::{
-    ContextPacket, Evidence, EvidenceThread, RememberReceipt, RetrievalConfig, RetrievalCue,
-    Retriever,
+    ContextPacket, Evidence, EvidenceThread, Polarity, ReinforceReceipt, RememberReceipt,
+    RetrievalConfig, RetrievalCue, Retriever,
 };
 pub use store::{AccessMode, AtomDb, Bond, Error, Stats};
