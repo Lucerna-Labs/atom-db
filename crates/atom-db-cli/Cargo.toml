@@ -1,0 +1,14 @@
+[package]
+name = "atom-db-cli"
+version = "0.1.0"
+edition = "2024"
+description = "Command-line operator surface for the Atom DB library"
+license = "MIT"
+publish = false
+
+[dependencies]
+atom-db = { path = "../.." }
+
+[[bin]]
+name = "atom-db"
+path = "src/main.rs"
