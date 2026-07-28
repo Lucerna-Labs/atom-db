@@ -895,14 +895,18 @@ mod tests {
 
     #[test]
     fn overlapping_windows_keep_boundary_answers_whole() {
-        // Two sentences that do not fit in one window: the answer sentence
-        // must reappear with its context in the following window.
+        // The answer sentence ends one valid window and must reappear with
+        // the following context in the next valid window.
         let document = format!(
             "{}. The lease recovers after the crash. {}.",
-            "setup context ".repeat(8).trim(),
-            "trailing detail ".repeat(8).trim()
+            "setup context ".repeat(5).trim(),
+            "trailing detail ".repeat(5).trim()
         );
-        let windows = passages_with_overlap(&document, 120, 60).unwrap();
+        assert_eq!(
+            passages_with_overlap(&document, 120, 60).unwrap_err(),
+            "overlap must stay below half the passage size"
+        );
+        let windows = passages_with_overlap(&document, 120, 59).unwrap();
         assert!(windows.len() >= 2);
         assert!(windows.iter().all(|window| window.len() <= 120));
         // The boundary sentence appears in two consecutive windows.

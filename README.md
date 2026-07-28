@@ -17,6 +17,11 @@ The implementation uses the Rust standard library and first-party workspace
 crates only. It has no third-party dependencies, and SHA-256 is implemented
 and tested in this repository.
 
+The operator CLI lives in the focused `crates/atom-db-cli` workspace crate and
+depends on the root `atom-db` library. It remains the default workspace member,
+so the commands below are unchanged, while the database library and executable
+each stay within the repository's 4,000-line crate boundary.
+
 ## Hypothesis
 
 If immutable distinctions can name themselves, durable facts can only follow facts they reference, and each accepted fact is independently verifiable, then useful structured memory can be built from atoms and bonds without planting a conventional database ontology in the substrate.
